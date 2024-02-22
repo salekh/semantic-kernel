@@ -9,7 +9,7 @@ In this project, we will set up a sample chat and evaluation flow for executing 
 ## Table of Contents
 
 - [Installation](#installation)
-- [Usage](#usage)
+- [Serving](#serving)
 - [Important Links](#important-links)
 - [License](#license)
 
@@ -29,13 +29,34 @@ In this project, we will set up a sample chat and evaluation flow for executing 
     pf flow init --flow math-copilot --type chat
     ```
 
-## Usage
+## Serving
 
-Instructions on how to use your project.
+After the flow has been created, you can serve the flow using the following command:
+
+    pf flow serve --source ./math-copilot --port 8081 --host localhost
+
+This will start an evaluation server through which this flow can be assessed.
+
+For production use, the flow can also be deployed to Docker, Kubernetes or an Azure App Service. Through the Azure AI Studio, this flow can also be hosted using
+an Azure ML Endpoint.
+
+## Evaluation
+
+![Semantic Kernel PromptFlow Evaluation](https://learn.microsoft.com/en-us/semantic-kernel/media/evaluating-batch-run-with-prompt-flow.png)
+
+One of the main benefits of using PromptFlow is its unique ability to give us an avenue to bulk test LLM Flows. This can be done by submitting bulk jobs to the
+PromptFlow server. The server will then evaluate the jobs and return the results.
+
+To evaluate the flow, you can use the following command:
+
+    pf run create --flow ./math-copilot --data ./math-copilot/data.jsonl --stream --name math-copilot-eval-10-1 --column-mapping chat_history='${data.chat_history}' question='${data.question}' 
+    
+    pf run show-details -n math-copilot-eval-10-1
 
 ## Important Links
 
 - [PromptFlow Docs](https://microsoft.github.io/promptflow/how-to-guides/index.html)
+- [Semantic Kernel Docs](https://learn.microsoft.com/en-us/semantic-kernel/)
 
 ## License
 

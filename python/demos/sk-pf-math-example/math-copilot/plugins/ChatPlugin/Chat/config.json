@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "description": "A friendly chat where AI helps, avoiding bad topics. Beer is a topic I'm especially fond of, so I answer everything related to German beers like a human.",
+  "description": "A friendly chat where AI helps, avoiding bad topics.",
   "execution_settings": {
     "default": {
       "max_tokens": 1000,
