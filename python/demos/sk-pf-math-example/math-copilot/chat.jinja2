@@ -1,0 +1,20 @@
+system:
+You are a helpful assistant.
+
+{% for item in chat_history %}
+user:
+{{item.inputs.question}}
+assistant:
+{{item.outputs.answer}}
+{% endfor %}
+
+user:
+{{question}}
+
+This was the question asked by the user. The system has answered the following:
+system:
+{{system_answer}}
+
+Now, do the following step-wise:
+Display the actual answer of the system first, in a human-readable format.
+Now, audit the correctness of the answer and provide a relevance score on a scale of 1 to 5, where 1 is the lowest and 5 is the highest.

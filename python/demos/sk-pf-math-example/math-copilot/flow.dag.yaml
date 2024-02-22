@@ -1,0 +1,41 @@
+environment:
+  python_requirements_txt: requirements.txt
+inputs:
+  chat_history:
+    type: list
+    is_chat_history: true
+    default: []
+  question:
+    type: string
+    is_chat_input: true
+    default: ""
+outputs:
+  answer:
+    type: string
+    reference: ${chat.output}
+    is_chat_output: true
+nodes:
+- name: math_planner
+  type: python
+  source:
+    type: code
+    path: math_planner.py
+  inputs:
+    input: ${inputs.question}
+    AzureOpenAIConnection: Default_AzureOpenAI
+    deployment_type: chat-completion
+    deployment_name: sa-canadae-gpt35turbo-1106
+- name: chat
+  type: llm
+  source:
+    type: code
+    path: chat.jinja2
+  inputs:
+    deployment_name: sa-canadae-gpt35turbo-1106
+    max_tokens: 256
+    temperature: 0.7
+    chat_history: ${inputs.chat_history}
+    question: ${inputs.question}
+    system_answer: ${math_planner.output}
+  connection: Default_AzureOpenAI
+  api: chat

@@ -1,0 +1,8 @@
+# --extra-index-url https://azuremlsdktestpypi.azureedge.net/promptflow/
+# openai is automatically installed as a dependency of promptflow
+promptflow-sdk[builtins]
+semantic-kernel==0.5.1.dev0
+promptflow
+promptflow-tools
+azure-ai-generative[index,evaluate,promptflow]
+azure-identity
