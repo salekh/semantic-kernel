@@ -39,7 +39,10 @@ async def my_python_tool(
 
     # Import the native functions
     kernel.import_plugin(Math(), "MathPlugin")
-    kernel.import_semantic_plugin_from_directory("./plugins", "ChatPlugin")
+    # First run without the chat plugin
+    # This shows that the math plugin will be triggered no matter what
+    # Limitation: Perfect Hallucination Scenario
+    # kernel.import_semantic_plugin_from_directory("./plugins", "ChatPlugin")
     planner = SequentialPlanner(kernel=kernel)
 
     ask = "Answer the user's question with the available capabilities: " + input
