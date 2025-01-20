@@ -26,7 +26,7 @@ class Math:
         Returns:
             str: The square root of the given number as a string.
         """
-        return str(math.sqrt(float(number)))
+        return str(math.sqrt(float(number))) or "0"
 
     @kernel_function(
         description="Adds two numbers together",

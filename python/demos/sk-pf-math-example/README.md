@@ -33,6 +33,7 @@ In this project, we will set up a sample chat and evaluation flow for executing 
 
 After the flow has been created, you can serve the flow using the following command:
 
+    pf flow test --flow math-copilot --interactive                                                           ─╯
     pf flow serve --source ./math-copilot --port 8081 --host localhost
 
 This will start an evaluation server through which this flow can be assessed.
