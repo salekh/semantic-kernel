@@ -7,7 +7,6 @@ using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using Json.More;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.SemanticKernel.ChatCompletion;
@@ -38,19 +37,23 @@ public sealed class FunctionCallingStepwisePlanner
     /// </summary>
     /// <param name="kernel">The <see cref="Kernel"/> containing services, plugins, and other state for use throughout the operation.</param>
     /// <param name="question">The question to answer</param>
+    /// <param name="chatHistoryForSteps">The chat history for the steps of the plan. If null, the planner will generate the chat history for the first step.</param>
     /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests. The default is <see cref="CancellationToken.None"/>.</param>
     /// <returns>Result containing the model's response message and chat history.</returns>
     public Task<FunctionCallingStepwisePlannerResult> ExecuteAsync(
         Kernel kernel,
         string question,
+        ChatHistory? chatHistoryForSteps = null,
         CancellationToken cancellationToken = default)
     {
         var logger = kernel.LoggerFactory.CreateLogger(this.GetType()) ?? NullLogger.Instance;
 
+#pragma warning disable CS8604 // Possible null reference argument.
         return PlannerInstrumentation.InvokePlanAsync(
-            static (FunctionCallingStepwisePlanner plan, Kernel kernel, string? question, CancellationToken cancellationToken)
-                => plan.ExecuteCoreAsync(kernel, question!, cancellationToken),
-            this, kernel, question, logger, cancellationToken);
+            static (FunctionCallingStepwisePlanner plan, Kernel kernel, Tuple<string?, ChatHistory?>? input, CancellationToken cancellationToken)
+                => plan.ExecuteCoreAsync(kernel, input?.Item1!, input?.Item2, cancellationToken),
+            this, kernel, new Tuple<string?, ChatHistory?>(question, chatHistoryForSteps), logger, cancellationToken);
+#pragma warning restore CS8604 // Possible null reference argument.
     }
 
     #region private
@@ -58,6 +61,7 @@ public sealed class FunctionCallingStepwisePlanner
     private async Task<FunctionCallingStepwisePlannerResult> ExecuteCoreAsync(
         Kernel kernel,
         string question,
+        ChatHistory chatHistoryForSteps,
         CancellationToken cancellationToken = default)
     {
         Verify.NotNullOrWhiteSpace(question);
@@ -65,22 +69,26 @@ public sealed class FunctionCallingStepwisePlanner
         IChatCompletionService chatCompletion = kernel.GetRequiredService<IChatCompletionService>();
         ILoggerFactory loggerFactory = kernel.LoggerFactory;
         ILogger logger = loggerFactory.CreateLogger(this.GetType()) ?? NullLogger.Instance;
-        var promptTemplateFactory = new KernelPromptTemplateFactory(loggerFactory);
         var stepExecutionSettings = this._options.ExecutionSettings ?? new OpenAIPromptExecutionSettings();
 
         // Clone the kernel so that we can add planner-specific plugins without affecting the original kernel instance
         var clonedKernel = kernel.Clone();
         clonedKernel.ImportPluginFromType<UserInteraction>();
 
-        // Create and invoke a kernel function to generate the initial plan
-        var initialPlan = await this.GeneratePlanAsync(question, clonedKernel, logger, cancellationToken).ConfigureAwait(false);
+        if (chatHistoryForSteps is null)
+        {
+            // Create and invoke a kernel function to generate the initial plan
+            var promptTemplateFactory = new KernelPromptTemplateFactory(loggerFactory);
+            var initialPlan = await this.GeneratePlanAsync(question, clonedKernel, logger, cancellationToken).ConfigureAwait(false);
 
-        var chatHistoryForSteps = await this.BuildChatHistoryForStepAsync(question, initialPlan, clonedKernel, promptTemplateFactory, cancellationToken).ConfigureAwait(false);
+            // Build chat history for the first step
+            chatHistoryForSteps = await this.BuildChatHistoryForStepAsync(question, initialPlan, clonedKernel, promptTemplateFactory, cancellationToken).ConfigureAwait(false);
+        }
 
         for (int i = 0; i < this._options.MaxIterations; i++)
         {
             // sleep for a bit to avoid rate limiting
-            if (i > 0)
+            if (i > 0 && this._options.MinIterationTimeMs > 0)
             {
                 await Task.Delay(this._options.MinIterationTimeMs, cancellationToken).ConfigureAwait(false);
             }
@@ -111,7 +119,7 @@ public sealed class FunctionCallingStepwisePlanner
                     {
                         // We found a final answer, but failed to parse it properly.
                         // Log the error message in chat history and let the planner try again.
-                        chatHistoryForSteps.AddUserMessage(finalAnswerError);
+                        chatHistoryForSteps.AddMessage(AuthorRole.Tool, finalAnswerError, metadata: new Dictionary<string, object?>(1) { { OpenAIChatMessageContent.ToolIdProperty, functionResponse.Id } });
                         continue;
                     }
 
@@ -166,7 +174,7 @@ public sealed class FunctionCallingStepwisePlanner
         ILogger logger,
         CancellationToken cancellationToken)
     {
-        openAIExecutionSettings.ToolCallBehavior = ToolCallBehavior.EnableKernelFunctions;
+        openAIExecutionSettings.FunctionChoiceBehavior = FunctionChoiceBehavior.Auto(autoInvoke: false);
 
         await this.ValidateTokenCountAsync(chatHistory, kernel, logger, openAIExecutionSettings, cancellationToken).ConfigureAwait(false);
         return await chatCompletion.GetChatMessageContentAsync(chatHistory, openAIExecutionSettings, kernel, cancellationToken).ConfigureAwait(false);
@@ -257,7 +265,11 @@ public sealed class FunctionCallingStepwisePlanner
     {
         string resultStr = string.Empty;
 
-        if (valueObj is RestApiOperationResponse apiResponse)
+        if (valueObj is ChatMessageContent chatMessageContent)
+        {
+            return chatMessageContent.ToString();
+        }
+        else if (valueObj is RestApiOperationResponse apiResponse)
         {
             resultStr = apiResponse.Content as string ?? string.Empty;
         }
@@ -273,12 +285,14 @@ public sealed class FunctionCallingStepwisePlanner
             }
             else
             {
-                resultStr = valueElement.ToJsonString();
+                resultStr = JsonSerializer.Serialize(valueElement);
             }
         }
         else
         {
+#pragma warning disable CS0618 // Type or member is obsolete
             resultStr = JsonSerializer.Serialize(valueObj);
+#pragma warning restore CS0618 // Type or member is obsolete
         }
 
         return resultStr;
@@ -296,7 +310,7 @@ public sealed class FunctionCallingStepwisePlanner
             string functionManual = string.Empty;
 
             // If using functions, get the functions manual to include in token count estimate
-            if (openAIExecutionSettings.ToolCallBehavior == ToolCallBehavior.EnableKernelFunctions)
+            if (openAIExecutionSettings.FunctionChoiceBehavior is not null)
             {
                 functionManual = await this.GetFunctionsManualAsync(kernel, logger, cancellationToken).ConfigureAwait(false);
             }

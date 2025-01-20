@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -19,7 +20,7 @@ namespace Microsoft.SemanticKernel.Planning.Handlebars;
 /// <summary>
 /// Represents a Handlebars planner.
 /// </summary>
-public sealed class HandlebarsPlanner
+public sealed partial class HandlebarsPlanner
 {
     /// <summary>
     /// Represents static options for all Handlebars Planner prompt templates.
@@ -27,7 +28,7 @@ public sealed class HandlebarsPlanner
     public static readonly HandlebarsPromptTemplateOptions PromptTemplateOptions = new()
     {
         // Options for built-in Handlebars helpers
-        Categories = new Category[] { Category.DateTime },
+        Categories = [Category.DateTime],
         UseCategoryPrefix = false,
 
         // Custom helpers
@@ -74,26 +75,45 @@ public sealed class HandlebarsPlanner
 
     private async Task<HandlebarsPlan> CreatePlanCoreAsync(Kernel kernel, string goal, KernelArguments? arguments, CancellationToken cancellationToken = default)
     {
-        // Get CreatePlan prompt template
-        var functionsMetadata = await kernel.Plugins.GetFunctionsAsync(this._options, null, null, cancellationToken).ConfigureAwait(false);
-        var availableFunctions = this.GetAvailableFunctionsManual(functionsMetadata, out var complexParameterTypes, out var complexParameterSchemas);
-        var createPlanPrompt = await this.GetHandlebarsTemplateAsync(kernel, goal, arguments, availableFunctions, complexParameterTypes, complexParameterSchemas, cancellationToken).ConfigureAwait(false);
-        ChatHistory chatMessages = this.GetChatHistoryFromPrompt(createPlanPrompt);
+        string? createPlanPrompt = null;
+        ChatMessageContent? modelResults = null;
 
-        // Get the chat completion results
-        var chatCompletionService = kernel.GetRequiredService<IChatCompletionService>();
-        var completionResults = await chatCompletionService.GetChatMessageContentAsync(chatMessages, executionSettings: this._options.ExecutionSettings, cancellationToken: cancellationToken).ConfigureAwait(false);
-
-        Match match = Regex.Match(completionResults.Content, @"```\s*(handlebars)?\s*(.*)\s*```", RegexOptions.Singleline);
-        if (!match.Success)
+        try
         {
-            throw new KernelException($"[{HandlebarsPlannerErrorCodes.InvalidTemplate}] Could not find the plan in the results. Additional helpers or input may be required.\n\nPlanner output:\n{completionResults}");
+            // Get CreatePlan prompt template
+            var functionsMetadata = await kernel.Plugins.GetFunctionsAsync(this._options, null, null, cancellationToken).ConfigureAwait(false);
+            var availableFunctions = this.GetAvailableFunctionsManual(functionsMetadata, out var complexParameterTypes, out var complexParameterSchemas);
+            createPlanPrompt = await this.GetHandlebarsTemplateAsync(kernel, goal, arguments, availableFunctions, complexParameterTypes, complexParameterSchemas, cancellationToken).ConfigureAwait(false);
+            ChatHistory chatMessages = this.GetChatHistoryFromPrompt(createPlanPrompt);
+
+            // Get the chat completion results
+            var chatCompletionService = kernel.GetRequiredService<IChatCompletionService>();
+            modelResults = await chatCompletionService.GetChatMessageContentAsync(chatMessages, executionSettings: this._options.ExecutionSettings, cancellationToken: cancellationToken).ConfigureAwait(false);
+
+            MatchCollection matches = ParseRegex().Matches(modelResults.Content ?? string.Empty);
+            if (matches.Count < 1)
+            {
+                throw new KernelException($"[{HandlebarsPlannerErrorCodes.InvalidTemplate}] Could not find the plan in the results. Additional helpers or input may be required.\n\nPlanner output:\n{modelResults.Content}");
+            }
+            else if (matches.Count > 1)
+            {
+                throw new KernelException($"[{HandlebarsPlannerErrorCodes.InvalidTemplate}] Identified multiple Handlebars templates in model response. Please try again.\n\nPlanner output:\n{modelResults.Content}");
+            }
+
+            var planTemplate = matches[0].Groups[2].Value.Trim();
+            planTemplate = MinifyHandlebarsTemplate(planTemplate);
+
+            return new HandlebarsPlan(planTemplate, createPlanPrompt);
         }
-
-        var planTemplate = match.Groups[2].Value.Trim();
-        planTemplate = MinifyHandlebarsTemplate(planTemplate);
-
-        return new HandlebarsPlan(planTemplate, createPlanPrompt);
+        catch (KernelException ex)
+        {
+            throw new PlanCreationException(
+                "CreatePlan failed. See inner exception for details.",
+                createPlanPrompt,
+                modelResults,
+                ex
+            );
+        }
     }
 
     private List<KernelFunctionMetadata> GetAvailableFunctionsManual(
@@ -101,8 +121,8 @@ public sealed class HandlebarsPlanner
         out HashSet<HandlebarsParameterTypeMetadata> complexParameterTypes,
         out Dictionary<string, string> complexParameterSchemas)
     {
-        complexParameterTypes = new();
-        complexParameterSchemas = new();
+        complexParameterTypes = [];
+        complexParameterSchemas = [];
 
         var functionsMetadata = new List<KernelFunctionMetadata>();
         foreach (var kernelFunction in availableFunctions)
@@ -138,7 +158,26 @@ public sealed class HandlebarsPlanner
         HashSet<HandlebarsParameterTypeMetadata> complexParameterTypes,
         Dictionary<string, string> complexParameterSchemas)
     {
-        // TODO (@teresaqhoang): Handle case when schema and ParameterType can exist i.e., when ParameterType = RestApiResponse
+        if (parameter.Schema is not null)
+        {
+            // Class types will have a defined schema, but we want to handle those as built-in complex types below
+            if (parameter.ParameterType is not null && parameter.ParameterType!.IsClass)
+            {
+                parameter = new(parameter) { Schema = null };
+            }
+            else
+            {
+                // Parse the schema to extract any primitive types and set in ParameterType property instead
+                var parsedParameter = parameter.ParseJsonSchema();
+                if (parsedParameter.Schema is not null)
+                {
+                    complexParameterSchemas[parameter.GetSchemaTypeName()] = parameter.Schema.RootElement.ToJsonString();
+                }
+
+                return parsedParameter;
+            }
+        }
+
         if (parameter.ParameterType is not null)
         {
             // Async return type - need to extract the actual return type and override ParameterType property
@@ -149,17 +188,6 @@ public sealed class HandlebarsPlanner
             }
 
             complexParameterTypes.UnionWith(parameter.ParameterType!.ToHandlebarsParameterTypeMetadata());
-        }
-        else if (parameter.Schema is not null)
-        {
-            // Parse the schema to extract any primitive types and set in ParameterType property instead
-            var parsedParameter = parameter.ParseJsonSchema();
-            if (parsedParameter.Schema is not null)
-            {
-                complexParameterSchemas[parameter.GetSchemaTypeName()] = parameter.Schema.RootElement.ToJsonString();
-            }
-
-            parameter = parsedParameter;
         }
 
         return parameter;
@@ -188,6 +216,9 @@ public sealed class HandlebarsPlanner
                     break;
                 case "assistant~":
                     chatMessages.AddAssistantMessage(message);
+                    break;
+                default:
+                    Debug.Fail($"Unexpected role: {role}");
                     break;
             }
         }
@@ -250,16 +281,39 @@ public sealed class HandlebarsPlanner
     private static string MinifyHandlebarsTemplate(string template)
     {
         // This regex pattern matches '{{', then any characters including newlines (non-greedy), then '}}'
-        string pattern = @"(\{\{[\s\S]*?}})";
-
         // Replace all occurrences of the pattern in the input template
-        return Regex.Replace(template, pattern, m =>
+        return MinifyRegex().Replace(template, m =>
         {
             // For each match, remove the whitespace within the handlebars, except for spaces
             // that separate different items (e.g., 'json' and '(get')
-            return Regex.Replace(m.Value, @"\s+", " ").Replace(" {", "{").Replace(" }", "}").Replace(" )", ")");
+            return WhitespaceRegex().Replace(m.Value, " ").Replace(" {", "{").Replace(" }", "}").Replace(" )", ")");
         });
     }
 
+    /// <summary>
+    /// Regex breakdown:
+    /// (```\s*handlebars){1}\s*: Opening backticks, starting boundary for HB template
+    /// ((([^`]|`(?!``))+): Any non-backtick character or one backtick character not followed by 2 more consecutive backticks
+    /// (\s*```){1}: Closing backticks, closing boundary for HB template
+    /// </summary>
+#if NET
+    [GeneratedRegex(@"(```\s*handlebars){1}\s*(([^`]|`(?!``))+)(\s*```){1}", RegexOptions.Multiline)]
+    private static partial Regex ParseRegex();
+
+    [GeneratedRegex(@"\{\{[\s\S]*?}}")]
+    private static partial Regex MinifyRegex();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex WhitespaceRegex();
+#else
+    private static readonly Regex s_parseRegex = new(@"(```\s*handlebars){1}\s*(([^`]|`(?!``))+)(\s*```){1}", RegexOptions.Multiline | RegexOptions.Compiled);
+    private static Regex ParseRegex() => s_parseRegex;
+
+    private static readonly Regex s_minifyRegex = new(@"(\{\{[\s\S]*?}})");
+    private static Regex MinifyRegex() => s_minifyRegex;
+
+    private static readonly Regex s_whitespaceRegex = new(@"\s+");
+    private static Regex WhitespaceRegex() => s_whitespaceRegex;
+#endif
     #endregion
 }

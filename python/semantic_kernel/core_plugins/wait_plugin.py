@@ -1,26 +1,29 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import asyncio
+from typing import Annotated
 
+from semantic_kernel.exceptions import FunctionExecutionException
+from semantic_kernel.functions.kernel_function_decorator import kernel_function
 from semantic_kernel.kernel_pydantic import KernelBaseModel
-from semantic_kernel.plugin_definition import kernel_function
 
 
 class WaitPlugin(KernelBaseModel):
-    """
-    WaitPlugin provides a set of functions to wait for a certain amount of time.
+    """WaitPlugin provides a set of functions to wait for a certain amount of time.
 
     Usage:
-        kernel.import_plugin(WaitPlugin(), plugin_name="wait")
+        kernel.add_plugin(WaitPlugin(), plugin_name="wait")
 
     Examples:
-        {{wait.seconds 5}} => Wait for 5 seconds
+        {{wait.wait 5}} => Wait for 5 seconds
     """
 
-    @kernel_function(description="Wait for a certain number of seconds.")
-    async def wait(self, seconds_text: str) -> None:
-        try:
-            seconds = max(float(seconds_text), 0)
-        except ValueError:
-            raise ValueError("seconds text must be a number")
-        await asyncio.sleep(seconds)
+    @kernel_function
+    async def wait(self, input: Annotated[float | str, "The number of seconds to wait, can be str or float."]) -> None:
+        """Wait for a certain number of seconds."""
+        if isinstance(input, str):
+            try:
+                input = float(input)
+            except ValueError as exc:
+                raise FunctionExecutionException("seconds text must be a number") from exc
+        await asyncio.sleep(abs(input))

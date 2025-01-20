@@ -36,7 +36,7 @@ public static class KernelFunctionYaml
         // dealing with the different deserialization outputs of JSON/YAML prompt configurations is being evaluated.
         foreach (var inputVariable in promptTemplateConfig.InputVariables)
         {
-            if (inputVariable.Default is not null && inputVariable.Default is not string)
+            if (inputVariable.Default is not null and not string)
             {
                 throw new NotSupportedException($"Default value for input variable '{inputVariable.Name}' must be a string. " +
                         $"This is a temporary limitation; future updates are expected to remove this constraint. Prompt function - '{promptTemplateConfig.Name ?? promptTemplateConfig.Description}'.");
@@ -57,7 +57,7 @@ public static class KernelFunctionYaml
     {
         var deserializer = new DeserializerBuilder()
             .WithNamingConvention(UnderscoredNamingConvention.Instance)
-            .WithNodeDeserializer(new PromptExecutionSettingsNodeDeserializer())
+            .WithTypeConverter(new PromptExecutionSettingsTypeConverter())
             .Build();
 
         return deserializer.Deserialize<PromptTemplateConfig>(text);

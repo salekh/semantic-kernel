@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -23,7 +24,8 @@ namespace Microsoft.SemanticKernel.Connectors.AzureAISearch;
 /// <summary>
 /// <see cref="AzureAISearchMemoryStore"/> is a memory store implementation using Azure AI Search.
 /// </summary>
-public class AzureAISearchMemoryStore : IMemoryStore
+[Experimental("SKEXP0020")]
+public partial class AzureAISearchMemoryStore : IMemoryStore
 {
     /// <summary>
     /// Create a new instance of memory storage using Azure AI Search.
@@ -135,7 +137,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
             return null;
         }
 
-        if (result?.Value == null)
+        if (result?.Value is null)
         {
             throw new KernelException("Memory read returned null");
         }
@@ -153,7 +155,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
         foreach (var key in keys)
         {
             var record = await this.GetAsync(collectionName, key, withEmbeddings, cancellationToken).ConfigureAwait(false);
-            if (record != null) { yield return record; }
+            if (record is not null) { yield return record; }
         }
     }
 
@@ -211,12 +213,12 @@ public class AzureAISearchMemoryStore : IMemoryStore
             // Index not found, no data to return
         }
 
-        if (searchResult == null) { yield break; }
+        if (searchResult is null) { yield break; }
 
         var minAzureSearchScore = CosineSimilarityToScore(minRelevanceScore);
-        await foreach (SearchResult<AzureAISearchMemoryRecord>? doc in searchResult.Value.GetResultsAsync())
+        await foreach (SearchResult<AzureAISearchMemoryRecord>? doc in searchResult.Value.GetResultsAsync().ConfigureAwait(false))
         {
-            if (doc == null || doc.Score < minAzureSearchScore) { continue; }
+            if (doc is null || doc.Score < minAzureSearchScore) { continue; }
 
             MemoryRecord memoryRecord = doc.Document.ToMemoryRecord(withEmbeddings);
 
@@ -227,7 +229,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
     /// <inheritdoc />
     public async Task RemoveAsync(string collectionName, string key, CancellationToken cancellationToken = default)
     {
-        await this.RemoveBatchAsync(collectionName, new[] { key }, cancellationToken).ConfigureAwait(false);
+        await this.RemoveBatchAsync(collectionName, [key], cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -259,7 +261,13 @@ public class AzureAISearchMemoryStore : IMemoryStore
     /// - replacing chars introduces a small chance of conflicts, e.g. "the-user" and "the_user".
     /// - we should consider whether making this optional and leave it to the developer to handle.
     /// </summary>
+#if NET
+    [GeneratedRegex(@"[\s|\\|/|.|_|:]")]
+    private static partial Regex ReplaceIndexNameSymbolsRegex();
+#else
+    private static Regex ReplaceIndexNameSymbolsRegex() => s_replaceIndexNameSymbolsRegex;
     private static readonly Regex s_replaceIndexNameSymbolsRegex = new(@"[\s|\\|/|.|_|:]");
+#endif
 
     private readonly ConcurrentDictionary<string, SearchClient> _clientsByIndex = new();
 
@@ -286,8 +294,8 @@ public class AzureAISearchMemoryStore : IMemoryStore
 
         var newIndex = new SearchIndex(indexName)
         {
-            Fields = new List<SearchField>
-            {
+            Fields =
+            [
                 new SimpleField(AzureAISearchMemoryRecord.IdField, SearchFieldDataType.String) { IsKey = true },
                 new VectorSearchField(AzureAISearchMemoryRecord.EmbeddingField, embeddingSize, ProfileName),
                 new(AzureAISearchMemoryRecord.TextField, SearchFieldDataType.String) { IsFilterable = true, IsFacetable = true },
@@ -295,7 +303,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
                 new SimpleField(AzureAISearchMemoryRecord.AdditionalMetadataField, SearchFieldDataType.String) { IsFilterable = true, IsFacetable = true },
                 new SimpleField(AzureAISearchMemoryRecord.ExternalSourceNameField, SearchFieldDataType.String) { IsFilterable = true, IsFacetable = true },
                 new SimpleField(AzureAISearchMemoryRecord.IsReferenceField, SearchFieldDataType.Boolean) { IsFilterable = true, IsFacetable = true },
-            },
+            ],
             VectorSearch = new VectorSearch
             {
                 Algorithms =
@@ -332,7 +340,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
 
     private async Task<List<string>> UpsertBatchAsync(
         string indexName,
-        IList<AzureAISearchMemoryRecord> records,
+        List<AzureAISearchMemoryRecord> records,
         CancellationToken cancellationToken = default)
     {
         var keys = new List<string>();
@@ -362,7 +370,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
             result = await UpsertCode().ConfigureAwait(false);
         }
 
-        if (result == null || result.Value.Results.Count == 0)
+        if (result is null || result.Value.Results.Count == 0)
         {
             throw new KernelException("Memory write returned null or an empty set");
         }
@@ -378,7 +386,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
     /// <param name="indexName">Value to normalize</param>
     /// <param name="parameterName">The name of the argument used with <paramref name="indexName"/>.</param>
     /// <returns>Normalized name</returns>
-    private string NormalizeIndexName(string indexName, [CallerArgumentExpression("indexName")] string? parameterName = null)
+    private string NormalizeIndexName(string indexName, [CallerArgumentExpression(nameof(indexName))] string? parameterName = null)
     {
         if (indexName.Length > 128)
         {
@@ -389,7 +397,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
         indexName = indexName.ToLowerInvariant();
 #pragma warning restore CA1308
 
-        return s_replaceIndexNameSymbolsRegex.Replace(indexName.Trim(), "-");
+        return ReplaceIndexNameSymbolsRegex().Replace(indexName.Trim(), "-");
     }
 
     /// <summary>
@@ -466,7 +474,7 @@ public class AzureAISearchMemoryStore : IMemoryStore
     {
         // Azure AI Search score formula. The min value is 0.333 for cosine similarity -1.
         score = Math.Max(score, 1.0 / 3);
-        return 2 - 1 / score;
+        return 2 - (1 / score);
     }
 
     private static double CosineSimilarityToScore(double similarity)

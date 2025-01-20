@@ -1,6 +1,7 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Globalization;
 using System.Threading.Tasks;
@@ -48,7 +49,7 @@ public sealed class KernelFunctionHelpersTests
     public async Task ItRendersFunctionHelpersWithPositionalArgumentsAsync()
     {
         // Arrange and Act
-        var template = "{{Foo-Combine \"Bar\" \"Baz\"}}"; // Use positional arguments instead of hashed arguments
+        var template = """{{Foo-Combine "Bar" "Baz"}}"""; // Use positional arguments instead of hashed arguments
         var result = await this.RenderPromptTemplateAsync(template);
 
         // Assert
@@ -83,7 +84,7 @@ public sealed class KernelFunctionHelpersTests
     public async Task ItRendersFunctionHelpersWitHashArgumentsAsync()
     {
         // Arrange and Act
-        var template = "{{Foo-Combine x=\"Bar\" y=\"Baz\"}}"; // Use positional arguments instead of hashed arguments
+        var template = """{{Foo-Combine x="Bar" y="Baz"}}"""; // Use positional arguments instead of hashed arguments
         var result = await this.RenderPromptTemplateAsync(template);
 
         // Assert
@@ -91,10 +92,25 @@ public sealed class KernelFunctionHelpersTests
     }
 
     [Fact]
+    public async Task ItRendersFunctionHelpersWitHashArgumentsAndInputVariableAsync()
+    {
+        // Arrange and Act
+        const string VarName = "param_x";
+        var template = """{{Foo-StringifyInt (""" + VarName + """)}}""";
+        var inputVariables = new List<InputVariable> { new() { Name = VarName } };
+        var arguments = new KernelArguments { [VarName] = 5 };
+
+        var result = await this.RenderPromptTemplateAsync(template, inputVariables, arguments);
+
+        // Assert
+        Assert.Equal("5", result);
+    }
+
+    [Fact]
     public async Task ShouldThrowExceptionWhenMissingRequiredParameterAsync()
     {
         // Arrange and Act
-        var template = "{{Foo-Combine x=\"Bar\"}}";
+        var template = """{{Foo-Combine x="Bar"}}""";
 
         // Assert
         var exception = await Assert.ThrowsAsync<KernelException>(() => this.RenderPromptTemplateAsync(template));
@@ -116,7 +132,7 @@ public sealed class KernelFunctionHelpersTests
     public async Task ShouldThrowExceptionWhenFunctionHelperHasInvalidParameterTypeAsync()
     {
         // Arrange and Act
-        var template = "{{Foo-StringifyInt x=\"twelve\"}}";
+        var template = """{{Foo-StringifyInt x="twelve"}}""";
 
         // Assert
         var exception = await Assert.ThrowsAsync<KernelException>(() => this.RenderPromptTemplateAsync(template));
@@ -124,10 +140,38 @@ public sealed class KernelFunctionHelpersTests
     }
 
     [Fact]
+    public async Task ShouldThrowExceptionWhenFunctionHasNullPositionalParameterAsync()
+    {
+        // Arrange and Act
+        var template = """{{Foo-StringifyInt (nullParameter)}}""";
+        var inputVariables = new List<InputVariable> { new() { Name = "nullParameter" } };
+        var arguments = new KernelArguments { ["nullParameter"] = null };
+
+        // Assert
+        var exception = await Assert.ThrowsAsync<KernelException>(() => this.RenderPromptTemplateAsync(template, inputVariables, arguments));
+        Assert.Contains("Invalid parameter type for function", exception.Message, StringComparison.CurrentCultureIgnoreCase);
+        Assert.Contains("<null>", exception.Message, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ShouldThrowExceptionWhenFunctionHasNullHashParameterAsync()
+    {
+        // Arrange and Act
+        var template = """{{Foo-StringifyInt x=(nullParameter)}}""";
+        var inputVariables = new List<InputVariable> { new() { Name = "nullParameter" } };
+        var arguments = new KernelArguments { ["nullParameter"] = null };
+
+        // Assert
+        var exception = await Assert.ThrowsAsync<KernelException>(() => this.RenderPromptTemplateAsync(template, inputVariables, arguments));
+        Assert.Contains("Invalid argument type for function", exception.Message, StringComparison.CurrentCultureIgnoreCase);
+        Assert.Contains("<null>", exception.Message, StringComparison.CurrentCultureIgnoreCase);
+    }
+
+    [Fact]
     public async Task ShouldThrowExceptionWhenFunctionHelperIsNotDefinedAsync()
     {
         // Arrange and Act
-        var template = "{{Foo-Random x=\"random\"}}";
+        var template = """{{Foo-Random x="random"}}""";
 
         // Assert
         var exception = await Assert.ThrowsAsync<HandlebarsRuntimeException>(() => this.RenderPromptTemplateAsync(template));
@@ -176,15 +220,20 @@ public sealed class KernelFunctionHelpersTests
     private readonly Kernel _kernel;
     private readonly KernelArguments _arguments;
 
-    private async Task<string> RenderPromptTemplateAsync(string template)
+    private async Task<string> RenderPromptTemplateAsync(string template, List<InputVariable>? inputVariables = null, KernelArguments? arguments = null)
     {
         // Arrange
         this._kernel.ImportPluginFromObject(new Foo());
         var resultConfig = InitializeHbPromptConfig(template);
+        if (inputVariables != null)
+        {
+            resultConfig.InputVariables = inputVariables;
+        }
+
         var target = (HandlebarsPromptTemplate)this._factory.Create(resultConfig);
 
         // Act
-        var result = await target.RenderAsync(this._kernel, this._arguments);
+        var result = await target.RenderAsync(this._kernel, arguments ?? this._arguments);
 
         return result;
     }
@@ -217,14 +266,9 @@ public sealed class KernelFunctionHelpersTests
         public CustomReturnType CustomReturnType(string textProperty) => new(textProperty);
     }
 
-    private sealed class CustomReturnType
+    private sealed class CustomReturnType(string textProperty)
     {
-        public CustomReturnType(string textProperty)
-        {
-            this.TextProperty = textProperty;
-        }
-
-        public string TextProperty { get; set; }
+        public string TextProperty { get; set; } = textProperty;
 
         public override string ToString() => this.TextProperty;
     }

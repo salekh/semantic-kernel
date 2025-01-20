@@ -13,17 +13,6 @@
             "locale": "en-US"
         }
     ],
-    "python.testing.pytestArgs": [
-        "tests"
-    ],
-    "python.testing.unittestEnabled": false,
-    "python.testing.pytestEnabled": true,
-    "pythonTestExplorer.testFramework": "pytest",
-    "pythonTestExplorer.pytestPath": "poetry",
-    "pythonTestExplorer.pytestArguments": [
-        "run",
-        "pytest"
-    ],
     "[python]": {
         "editor.codeActionsOnSave": {
             "source.organizeImports": "explicit",
@@ -35,6 +24,9 @@
     "notebook.formatOnSave.enabled": true,
     "notebook.codeActionsOnSave": {
         "source.fixAll": true,
-        "source.organizeImports": true
-    }
+        "source.organizeImports": false
+    },
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/samples/learn_resources"
+    ],
 }
