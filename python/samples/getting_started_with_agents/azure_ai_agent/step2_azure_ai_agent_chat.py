@@ -1,12 +1,15 @@
 # Copyright (c) Microsoft. All rights reserved.
 
 import asyncio
-
+import os
 from azure.identity.aio import DefaultAzureCredential
-
+from dotenv import load_dotenv
 from semantic_kernel.agents import AgentGroupChat
 from semantic_kernel.agents.azure_ai import AzureAIAgent, AzureAIAgentSettings
-from semantic_kernel.agents.strategies.termination.termination_strategy import TerminationStrategy
+from azure.ai.projects.models import BingGroundingTool
+from semantic_kernel.agents.strategies.termination.termination_strategy import (
+    TerminationStrategy,
+)
 from semantic_kernel.contents.chat_message_content import ChatMessageContent
 from semantic_kernel.contents.utils.author_role import AuthorRole
 
@@ -23,15 +26,16 @@ class ApprovalTerminationStrategy(TerminationStrategy):
 
     async def should_agent_terminate(self, agent, history):
         """Check if the agent should terminate."""
-        return "approved" in history[-1].content.lower()
+        return "approved" in history[-1].content.lower() or "approve" in history[-1].content.lower()
 
 
 REVIEWER_NAME = "ArtDirector"
 REVIEWER_INSTRUCTIONS = """
 You are an art director who has opinions about copywriting born of a love for David Ogilvy.
 The goal is to determine if the given copy is acceptable to print.
-If so, state that it is approved.  Do not use the word "approve" unless you are giving approval.
-If not, provide insight on how to refine suggested copy without example.
+If so, state that it is approved. Explicitly state that the copy is approved.
+Do not use the word "approve" unless you are giving approval.
+If not, provide insight on how to refine suggested copy without example. Keep it brief.
 """
 
 COPYWRITER_NAME = "CopyWriter"
@@ -41,11 +45,12 @@ The goal is to refine and decide on the single best copy as an expert in the fie
 Only provide a single proposal per response.
 You're laser focused on the goal at hand.
 Don't waste time with chit chat.
-Consider suggestions when refining an idea.
+Consider suggestions when refining an idea. Do not include any feedback in your response.
 """
 
 
 async def main():
+    load_dotenv()
     ai_agent_settings = AzureAIAgentSettings.create()
 
     async with (
@@ -55,11 +60,20 @@ async def main():
             conn_str=ai_agent_settings.project_connection_string.get_secret_value(),
         ) as client,
     ):
+        # Get Bing Grounding Tool
+        bing_connection = await client.connections.get(
+            connection_name=os.environ["BING_CONNECTION_NAME"]
+        )
+        conn_id = bing_connection.id
+        bing = BingGroundingTool(connection_id=conn_id)
+
         # Create the reviewer agent definition
         reviewer_agent_definition = await client.agents.create_agent(
             model=ai_agent_settings.model_deployment_name,
             name=REVIEWER_NAME,
             instructions=REVIEWER_INSTRUCTIONS,
+            tools=bing.definitions,
+            headers={"x-ms-enable-preview": "true"},
         )
         # Create the reviewer Azure AI Agent
         agent_reviewer = AzureAIAgent(
@@ -72,22 +86,30 @@ async def main():
             model=ai_agent_settings.model_deployment_name,
             name=COPYWRITER_NAME,
             instructions=COPYWRITER_INSTRUCTIONS,
+            tools=bing.definitions,
+            headers={"x-ms-enable-preview": "true"},
         )
         # Create the copy writer Azure AI Agent
         agent_writer = AzureAIAgent(
             client=client,
             definition=copy_writer_agent_definition,
+            tools=bing.definitions,
+            headers={"x-ms-enable-preview": "true"},
         )
 
         chat = AgentGroupChat(
             agents=[agent_writer, agent_reviewer],
-            termination_strategy=ApprovalTerminationStrategy(agents=[agent_reviewer], maximum_iterations=10),
+            termination_strategy=ApprovalTerminationStrategy(
+                agents=[agent_reviewer], maximum_iterations=10
+            ),
         )
 
         input = "a slogan for a new line of electric cars."
 
         try:
-            await chat.add_chat_message(ChatMessageContent(role=AuthorRole.USER, content=input))
+            await chat.add_chat_message(
+                ChatMessageContent(role=AuthorRole.USER, content=input)
+            )
             print(f"# {AuthorRole.USER}: '{input}'")
 
             async for content in chat.invoke():
@@ -100,6 +122,7 @@ async def main():
             async for message in chat.get_chat_messages(agent=agent_reviewer):
                 print(f"# {message.role} - {message.name or '*'}: '{message.content}'")
         finally:
+            print("Cleaning up...")
             await chat.reset()
             await client.agents.delete_agent(agent_reviewer.id)
             await client.agents.delete_agent(agent_writer.id)
