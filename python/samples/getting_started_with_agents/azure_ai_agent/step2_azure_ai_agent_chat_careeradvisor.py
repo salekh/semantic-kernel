@@ -50,8 +50,9 @@ JOBFINDER_INSTRUCTIONS = """
 You are a job search agent who finds job postings in Munich, Germany matching the 
 career paths suggested by the CareerPlannerAgent. 
 You strictly use the Bing Web Search tool to do this. Do not provide job openings
-from your memory. Provide links to actual job postings, clearly list job titles, companies, and key requirements.
-Do not invent any details. This is deadly serious.
+from your memory. 
+Provide links to actual job postings, clearly list job titles, companies, and key requirements.
+Don't provide any job listings without a link. Do not invent any details. This is deadly serious.
 
 Assess the career path based on the job postings you find. Give a score between 1 and 10,
 with 10 being the best. If the score is below 5, provide feedback to the CareerPlannerAgent.
@@ -70,6 +71,15 @@ Once the plan is complete:
 - Provide it to the user, while using the word "Approved Plan" in the message. 
 Do not use the word "approve" or "approved" unless you are giving approval.
 """
+
+# Sample user inputs:
+# - I have a Bachelor degree in Business Informatics, and have programming skills in Python. What are the best career paths for me? Find job openings for me.
+# - I have skills in data analysis, Python programming, and environmental science. What career paths should I consider? Also find relevant jobs for me in the market.
+# - I'm currently pursuing a Master's in Mechanical Engineering at TUM and have experience with CAD software and robotics. What career paths should I explore? Can you find relevant job openings in Munich?
+# - I'm studying Computer Science at LMU Munich, specializing in artificial intelligence and machine learning. What are suitable career options for me, and can you find job postings in Munich?
+# - I'm a student at Hochschule München studying Renewable Energy Systems, with skills in project management and sustainability analysis. What career paths would you recommend, and can you find relevant jobs in Munich?
+# - I'm enrolled in a Bachelor's program in Economics at Munich Business School, with strong analytical and statistical skills. What career opportunities should I consider, and can you find job openings in Munich?
+# - I'm studying Bioinformatics at TUM, proficient in Python, R, and data visualization. What career paths are suitable for me, and can you find relevant job postings in Munich?
 
 
 async def main():
@@ -123,7 +133,7 @@ async def main():
             ),
         )
 
-        user_input = """I have skills in data analysis, Python programming, and environmental science. What career paths should I consider? Also find relevant jobs for me in the market."""
+        user_input = "I'm currently pursuing a Master's in Mechanical Engineering at TUM and have experience with CAD software and robotics. What career paths should I explore? Can you find relevant job openings in Munich?"
 
         try:
             await chat.add_chat_message(
